@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Star Data Processing</title>
+    <!-- Load D3.js library -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <!-- Load JavaScript utility functions -->
+    <script src="/static/js/utils.js"></script>
+    <!-- Load JavaScript data processing functions -->
+    <script src="/static/js/dataProcessing.js"></script>
+    <script src="/static/js/julian.js" defer></script>
+    <style>
+        body {
+            background-color: black;
+            color: white;
+            font-family: 'Arial', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 0;
+        }
+        #output {
+            width: 100%;
+            height: 80vh;
+            background-color: black;
+        }
+        .controls, .slider-container {
+            width: 100%;
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            background-color: #1c1c1c;
+            padding: 10px;
+            margin-top: 10px;
+        }
+        .controls label, .slider-container label {
+            margin-right: 10px;
+            font-weight: bold;
+        }
+        .tooltip {
+            position: absolute;
+            text-align: center;
+            padding: 8px;
+            font: 12px sans-serif;
+            background: white;
+            color: black;
+            border: 0px;
+            border-radius: 4px;
+            pointer-events: none;
+            opacity: 0;
+        }
+        .slider {
+            width: 60%;
+        }
+        h1 {
+            text-align: center;
+            margin: 20px 0;
+            color: #e3e3e3;
+        }
+        #currentTime {
+            margin-bottom: 10px;
+            margin-left: 10px;
+            font-size: 1.2em;
+            font-weight: bold;
+            display: inline-block;
+        }
+        .embed-container {
+            position: relative;
+            padding-bottom: 60%; /* Adjusted to 60% for rectangular layout */
+            height: 0;
+            max-width: 100%;
+            margin-top: 20px;
+        }
+        .embed-container iframe, .embed-container object, .embed-container iframe {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        .embed-container small a {
+            font-size: 1.2em; /* Adjusted font size */
+            color: #0000FF;
+            text-align: left;
+        }
+    </style>
+</head>
+<body>
+    <h1>Star Data Processing</h1>
+    <div class="controls">
+        <div>
+            <label for="latitude">Latitude:</label>
+            <input type="number" id="latitude" step="any" placeholder="Enter latitude">
+        </div>
+        <div>
+            <label for="longitude">Longitude:</label>
+            <input type="number" id="longitude" step="any" placeholder="Enter longitude">
+        </div>
+        <div>
+            <label for="date">Date:</label>
+            <input type="date" id="date">
+        </div>
+    </div>
+    <div class="controls">
+        <button id="loadDataButton">Load Data</button>
+        <button id="toggleLinesButton">Toggle Lines</button>
+        <button id="toggleStarsButton">Toggle Stars</button>
+        <div class="slider-container">
+            <label for="datasetSlider">Select Time:</label>
+            <input type="range" id="datasetSlider" class="slider" min="1" max="24" value="1">
+            <div id="currentTime">Time: Noon</div>
+        </div>
+    </div>
+    <div id="output"></div>
+
+    <div class="embed-container">
+        <small><a href="https://umass-amherst.maps.arcgis.com/apps/Embed/index.html?webmap=378567d5df7d4e5180ea21079037e7b1&extent=-128.3577,-26.8793,-61.4457,57.9417&zoom=true&scale=true&legendlayers=true&disable_scroll=false&theme=dark" style="color:#0000FF;text-align:left" target="_blank">View Detailed Northern Hemisphere Chart</a></small><br></iframe>
+    </div>
+
+    <script>
+        const timeLabels = [
+            "Noon", "1 PM", "2 PM", "3 PM", "4 PM", "5 PM", "6 PM", "7 PM", "8 PM", "9 PM", "10 PM", "11 PM",
+            "Midnight", "1 AM", "2 AM", "3 AM", "4 AM", "5 AM", "6 AM", "7 AM", "8 AM", "9 AM", "10 AM", "11 AM"
+        ];
+
+        const starVisibility = {};
+        const lineVisibility = {};
+        const coordsData = {};
+        let currentDataset = 'COORDS_1'; // Track the current dataset
+
+        for (let i = 1; i <= 24; i++) {
+            starVisibility[`COORDS_${i}`] = i === 1; // Initial visibility: only COORDS_1 is visible
+            lineVisibility[`COORDS_${i}`] = i === 1;
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('loadDataButton').addEventListener('click', async function() {
+                const latitude = parseFloat(document.getElementById('latitude').value);
+                const longitude = parseFloat(document.getElementById('longitude').value);
+                const date = document.getElementById('date').value;
+                const julianDates = await getJulianDateNoon();
+                if (julianDates && julianDates.length >= 24) {
+                    loadData(latitude, longitude, julianDates);
+                } else {
+                    console.error('Failed to calculate Julian dates.');
+                }
+            });
+
+            document.getElementById('toggleLinesButton').addEventListener('click', function() {
+                toggleLines();
+            });
+
+            document.getElementById('toggleStarsButton').addEventListener('click', function() {
+                toggleStars();
+            });
+
+            document.getElementById('datasetSlider').addEventListener('input', function() {
+                setDataset(`COORDS_${this.value}`);
+                document.getElementById('currentTime').textContent = `Time: ${timeLabels[this.value - 1]}`;
+            });
+        });
+
+        function setDataset(dataset) {
+            currentDataset = dataset;
+            for (let i = 1; i <= 24; i++) {
+                starVisibility[`COORDS_${i}`] = false;
+                lineVisibility[`COORDS_${i}`] = false;
+            }
+            starVisibility[dataset] = true;
+            lineVisibility[dataset] = true;
+            updateVisibility();
+        }
+
+        function toggleLines() {
+            lineVisibility[currentDataset] = !lineVisibility[currentDataset];
+            updateVisibility();
+        }
+
+        function toggleStars() {
+            starVisibility[currentDataset] = !starVisibility[currentDataset];
+            updateVisibility();
+        }
+
+        function updateVisibility() {
+            for (let i = 1; i <= 24; i++) {
+                d3.selectAll(`.stars${i}`).attr("visibility", starVisibility[`COORDS_${i}`] ? "visible" : "hidden");
+                d3.selectAll(`.lines${i}`).attr("visibility", lineVisibility[`COORDS_${i}`] ? "visible" : "hidden");
+            }
+        }
+
+        function loadData(latitude, longitude, julianDates) {
+            // Remove any existing SVG before creating a new one
+            d3.select("#output").selectAll("svg").remove();
+
+            const svg = d3.select("#output")
+                .append("svg")
+                .attr("width", "100%")
+                .attr("height", "100%")
+                .style("background-color", "black");
+
+            const width = document.getElementById("output").clientWidth;
+            const height = document.getElementById("output").clientHeight;
+            const radius = Math.min(width, height) / 2;
+
+            const g = svg.append("g")
+                .attr("transform", `translate(${width / 2}, ${height / 2}) rotate(-90)`);
+
+            const polarScale = d3.scaleLinear()
+                .domain([0, 90])
+                .range([0, radius]);
+
+            const angleScale = d3.scaleLinear()
+                .domain([0, 360])
+                .range([0, 2 * Math.PI]);
+
+            const tooltip = d3.select("body").append("div")
+                .attr("class", "tooltip");
+
+            const csvUrl = 'https://docs.google.com/spreadsheets/d/1RvWQSblw3MYcPOs43HbPGLR_1E1f5o9UtS6lAMf8u68/gviz/tq?tqx=out:csv';
+            d3.csv(csvUrl)
+                .then(rows => {
+                    for (let i = 1; i <= 24; i++) {
+                        coordsData[`COORDS_${i}`] = { stars: [], lines: [] };
+                    }
+
+                    rows.forEach(row => {
+                        const hip = parseInt(row.Hipparcos_Catalogue);
+                        const RA = parseFloat(row.Ra_decimal);
+                        const Dec = parseFloat(row.Dec_decimal);
+                        const magnitude = parseFloat(row.Magnitude);
+                        const StarName = row.StarName;
+                        const Constellation = row.Constellation;
+                        const Red = parseFloat(row.Red);
+                        const Blue = parseFloat(row.Blue);
+                        const Green = parseFloat(row.Green);
+
+                        const color = `rgb(${Red}, ${Green}, ${Blue})`;
+
+                        for (let i = 1; i <= 24; i++) {
+                            const coords = raDecToAltAz(RA, Dec, latitude, longitude, julianDates[i - 1]);
+                            if (coords[0] <= 90) {
+                                if (!coordsData[`COORDS_${i}`].starsMap) {
+                                    coordsData[`COORDS_${i}`].starsMap = new Map();
+                                }
+                                coordsData[`COORDS_${i}`].starsMap.set(hip, { coords, magnitude, StarName, Constellation, color });
+                            }
+                        }
+                    });
+
+                    const asterismsCsvUrl = 'https://docs.google.com/spreadsheets/d/1sxIzXvn9zOwN2Ip3rj_vLXRhm8FVqnIbZJLzF-AiFMU/gviz/tq?tqx=out:csv';
+                    d3.csv(asterismsCsvUrl)
+                        .then(asterismsRows => {
+                            asterismsRows.slice(1).forEach((row, index) => {
+                                const hip1 = parseInt(row['HIP1']);
+                                const hip2 = parseInt(row['HIP2']);
+
+                                for (let i = 1; i <= 24; i++) {
+                                    const data1 = coordsData[`COORDS_${i}`].starsMap.get(hip1);
+                                    const data2 = coordsData[`COORDS_${i}`].starsMap.get(hip2);
+                                    if (data1 && data2) {
+                                        coordsData[`COORDS_${i}`].lines.push({ r: [data1.coords[0], data2.coords[0]], theta: [data1.coords[1], data2.coords[1]] });
+                                    }
+                                }
+                            });
+
+                            for (let i = 1; i <= 24; i++) {
+                                coordsData[`COORDS_${i}`].starsMap.forEach((data, hip) => {
+                                    coordsData[`COORDS_${i}`].stars.push({ r: data.coords[0], theta: data.coords[1], color: data.color, size: getMarkerSize(data.magnitude), magnitude: data.magnitude, StarName: data.StarName, Constellation: data.Constellation });
+                                });
+                            }
+
+                            drawPolarGraph(g, polarScale, angleScale, tooltip, radius);
+                        })
+                        .catch(error => console.error('Error loading the asterisms CSV file:', error));
+                })
+                .catch(error => console.error('Error loading the CSV file:', error));
+        }
+
+        function drawPolarGraph(g, polarScale, angleScale, tooltip, radius) {
+            for (let i = 1; i <= 24; i++) {
+                g.selectAll(`.line${i}`)
+                    .data(coordsData[`COORDS_${i}`].lines)
+                    .enter()
+                    .append("line")
+                    .attr("class", `lines${i}`)
+                    .attr("x1", d => polarScale(d.r[0]) * Math.cos(angleScale(d.theta[0])))
+                    .attr("y1", d => polarScale(d.r[0]) * Math.sin(angleScale(d.theta[0])))
+                    .attr("x2", d => polarScale(d.r[1]) * Math.cos(angleScale(d.theta[1])))
+                    .attr("y2", d => polarScale(d.r[1]) * Math.sin(angleScale(d.theta[1])))
+                    .attr("stroke", "rgba(173, 216, 230, 0.5)")
+                    .attr("stroke-width", 1)
+                    .attr("visibility", lineVisibility[`COORDS_${i}`] ? "visible" : "hidden");
+
+                g.selectAll(`.star${i}`)
+                    .data(coordsData[`COORDS_${i}`].stars)
+                    .enter()
+                    .append("circle")
+                    .attr("class", `stars${i}`)
+                    .attr("cx", d => polarScale(d.r) * Math.cos(angleScale(d.theta)))
+                    .attr("cy", d => polarScale(d.r) * Math.sin(angleScale(d.theta)))
+                    .attr("r", d => d.size)
+                    .attr("fill", d => d.color)
+                    .attr("visibility", starVisibility[`COORDS_${i}`] ? "visible" : "hidden")
+                    .on("mouseover", function(event, d) {
+                        tooltip.transition()
+                            .duration(200)
+                            .style("opacity", .9);
+                        tooltip.html(`Star: ${d.StarName}<br>Constellation: ${d.Constellation}<br>Magnitude: ${d.magnitude}`)
+                            .style("left", (event.pageX + 5) + "px")
+                            .style("top", (event.pageY - 28) + "px");
+                    })
+                    .on("mouseout", function() {
+                        tooltip.transition()
+                            .duration(500)
+                            .style("opacity", 0);
+                    });
+            }
+
+            // Adding white text for degree markings
+            const degrees = [0, 45, 90, 135, 180, 225, 270, 315];
+            const degreeLabels = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+            const largeLabels = ['N', 'W', 'NW'];
+
+            g.selectAll(".degree-label")
+                .data(degrees)
+                .enter()
+                .append("text")
+                .attr("class", "degree-label")
+                .attr("x", d => (radius + 20) * Math.cos(angleScale(d)))
+                .attr("y", d => (radius + 20) * Math.sin(angleScale(d)))
+                .attr("fill", "white")
+                .attr("font-size", d => largeLabels.includes(degreeLabels[degrees.indexOf(d)]) ? "16px" : "12px")
+                .attr("text-anchor", d => {
+                    if (d === 0 || d === 180) return "middle";
+                    if (d === 90) return "start";
+                    if (d === 270) return "end";
+                    return d < 180 ? "start" : "end";
+                })
+                .attr("dominant-baseline", "middle")
+                .attr("transform", d => `rotate(90, ${(radius + 20) * Math.cos(angleScale(d))}, ${(radius + 20) * Math.sin(angleScale(d))})`)
+                .text((d, i) => degreeLabels[i]);
+
+            // Adding outermost radial axis line
+            g.append("circle")
+                .attr("cx", 0)
+                .attr("cy", 0)
+                .attr("r", polarScale(90))
+                .attr("stroke", "white")
+                .attr("stroke-width", 0.5)
+                .attr("fill", "none");
+        }
+
+        function getMarkerSize(magnitude) {
+            if (magnitude <= 1) {
+                return 6;
+            } else if (magnitude <= 2) {
+                return 5;
+            } else if (magnitude <= 3) {
+                return 4;
+            } else if (magnitude <= 4) {
+                return 3;
+            } else if (magnitude <= 5) {
+                return 1.5;
+            } else {
+                return 0.2;
+            }
+        }
+    </script>
+</body>
+</html>
